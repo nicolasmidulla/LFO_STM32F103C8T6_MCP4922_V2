@@ -2,43 +2,110 @@
 /**
   ******************************************************************************
   * @file           : main.c
-  * @brief          : Control MCP4922 con multiplexor CD4051 - Dual Channel SYNC/FREE
+  * @brief          : Main program body
   ******************************************************************************
   */
 /* USER CODE END Header */
-
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "project_config.h"
-#include "signal_generator.h"
-#include "mcp4922.h"
-#include "multiplexor.h"
-#include "user_interface.h"
+#include "adc.h"
+#include "spi.h"
+#include "tim.h"
+#include "usart.h"
+#include "gpio.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+typedef struct {
+    uint16_t amplitude;
+    uint32_t frequency;
+    uint32_t phase_acc;
+    uint32_t phase_inc;
+    uint16_t current_value;
+    uint8_t waveform;
+    uint8_t sync_mode;
+    uint32_t clock_period;
+    uint8_t subdivision;
+} Signal_Generator_t;
+
+typedef enum {
+    WAVE_SINE = 0, WAVE_SQUARE, WAVE_TRIANGLE, WAVE_SAWTOOTH, WAVE_RAMP_DOWN, WAVE_RANDOM, WAVE_COUNT
+} WaveformType_t;
+
+typedef enum { MODE_FREE = 0, MODE_SYNC } OperationMode_t;
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+#define MCP4922_CH_A            0x0000
+#define MCP4922_CH_B            0x8000
+#define MCP4922_GAINx1          0x2000
+#define MCP4922_SHUTDOWN_OFF    0x1000
+
+#define SAMPLE_RATE         10000
+#define MUX_CHANNELS        8
+#define PHASE_RESOLUTION    24
+#define FREQ_SCALE          ((1UL << PHASE_RESOLUTION) / SAMPLE_RATE)
+
+#define DEBOUNCE_TIME_MS     200
+#define LONG_PRESS_TIME_MS   3000
+#define SYNC_DEBOUNCE_MS    10
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-ADC_HandleTypeDef hadc1;
-SPI_HandleTypeDef hspi1;
-TIM_HandleTypeDef htim2;
-UART_HandleTypeDef huart1;
-
-volatile uint8_t update_flag = 0;
 
 /* USER CODE BEGIN PV */
+Signal_Generator_t signal_gen_A;
+Signal_Generator_t signal_gen_B;
+uint16_t adc_values[MUX_CHANNELS];
+volatile uint8_t update_flag = 0;
+uint32_t debug_counter = 0;
+uint32_t spi_errors = 0;
 
+const uint8_t subdivisions[6] = {1, 2, 4, 8, 16, 32};
+const char* waveform_names[WAVE_COUNT] = {"Sine", "Square", "Triangle", "Sawtooth", "RampDn", "Random"};
+const char* mode_names[2] = {"FREE", "SYNC"};
+
+const uint16_t sine_table[256] = {
+    2048, 2098, 2148, 2198, 2248, 2298, 2348, 2398, 2447, 2496, 2545, 2594, 2642, 2690, 2737, 2784,
+    2831, 2877, 2923, 2968, 3013, 3057, 3100, 3143, 3185, 3226, 3267, 3307, 3346, 3385, 3423, 3459,
+    3495, 3530, 3565, 3598, 3630, 3662, 3692, 3722, 3750, 3777, 3804, 3829, 3853, 3876, 3898, 3919,
+    3939, 3958, 3976, 3992, 4007, 4021, 4034, 4045, 4056, 4065, 4073, 4080, 4085, 4089, 4093, 4094,
+    4095, 4094, 4093, 4089, 4085, 4080, 4073, 4065, 4056, 4045, 4034, 4021, 4007, 3992, 3976, 3958,
+    3939, 3919, 3898, 3876, 3853, 3829, 3804, 3777, 3750, 3722, 3692, 3662, 3630, 3598, 3565, 3530,
+    3495, 3459, 3423, 3385, 3346, 3307, 3267, 3226, 3185, 3143, 3100, 3057, 3013, 2968, 2923, 2877,
+    2831, 2784, 2737, 2690, 2642, 2594, 2545, 2496, 2447, 2398, 2348, 2298, 2248, 2198, 2148, 2098,
+    2048, 1998, 1948, 1898, 1848, 1798, 1748, 1698, 1649, 1600, 1551, 1502, 1454, 1406, 1359, 1312,
+    1265, 1219, 1173, 1128, 1083, 1039,  996,  953,  911,  870,  829,  789,  750,  711,  673,  637,
+     601,  566,  531,  498,  466,  434,  404,  374,  346,  319,  292,  267,  243,  220,  198,  177,
+     157,  138,  120,  104,   89,   75,   62,   51,   40,   31,   23,   16,   11,    7,    3,    2,
+       1,    2,    3,    7,   11,   16,   23,   31,   40,   51,   62,   75,   89,  104,  120,  138,
+     157,  177,  198,  220,  243,  267,  292,  319,  346,  374,  404,  434,  466,  498,  531,  566,
+     601,  637,  673,  711,  750,  789,  829,  870,  911,  953,  996, 1039, 1083, 1128, 1173, 1219,
+    1265, 1312, 1359, 1406, 1454, 1502, 1551, 1600, 1649, 1698, 1748, 1798, 1848, 1898, 1948, 1998
+};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
-static void MX_GPIO_Init(void);
-static void MX_ADC1_Init(void);
-static void MX_SPI1_Init(void);
-static void MX_TIM2_Init(void);
-static void MX_USART1_UART_Init(void);
-
 /* USER CODE BEGIN PFP */
 int _write(int file, char *ptr, int len);
+void MCP4922_Init(void);
+HAL_StatusTypeDef MCP4922_WriteValue(uint8_t channel, uint16_t value);
+uint16_t GenerateWaveform(Signal_Generator_t* gen);
+uint16_t GenerateSineWave(Signal_Generator_t* gen);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -46,6 +113,71 @@ int _write(int file, char *ptr, int len);
 int _write(int file, char *ptr, int len) {
     HAL_UART_Transmit(&huart1, (uint8_t*)ptr, len, HAL_MAX_DELAY);
     return len;
+}
+
+void MCP4922_Init(void) {
+    // Configurar CS como inactivo (alto)
+    HAL_GPIO_WritePin(MCP4922_CS_GPIO_Port, MCP4922_CS_Pin, GPIO_PIN_SET);
+
+    // Inicializar los generadores de señal
+    signal_gen_A.amplitude = 1023;
+    signal_gen_A.frequency = 1000000;
+    signal_gen_A.phase_acc = 0;
+    signal_gen_A.phase_inc = (signal_gen_A.frequency * FREQ_SCALE) / 1000;
+    signal_gen_A.current_value = 2048;
+    signal_gen_A.waveform = WAVE_SINE;
+    signal_gen_A.sync_mode = MODE_FREE;
+
+    signal_gen_B.amplitude = 512;
+    signal_gen_B.frequency = 2000000;
+    signal_gen_B.phase_acc = 0;
+    signal_gen_B.phase_inc = (signal_gen_B.frequency * FREQ_SCALE) / 1000;
+    signal_gen_B.current_value = 2048;
+    signal_gen_B.waveform = WAVE_SINE;
+    signal_gen_B.sync_mode = MODE_FREE;
+
+    // Escribir valores iniciales en ambos canales
+    MCP4922_WriteValue(0, 2048);
+    MCP4922_WriteValue(1, 2048);
+}
+
+HAL_StatusTypeDef MCP4922_WriteValue(uint8_t channel, uint16_t value) {
+    uint16_t spi_data;
+    uint8_t data_bytes[2];
+    HAL_StatusTypeDef result;
+
+    if(value > 4095) value = 4095;
+
+    spi_data = (channel == 0) ? MCP4922_CH_A : MCP4922_CH_B;
+    spi_data |= MCP4922_GAINx1;
+    spi_data |= MCP4922_SHUTDOWN_OFF;
+    spi_data |= (value & 0x0FFF);
+
+    data_bytes[0] = (spi_data >> 8) & 0xFF;
+    data_bytes[1] = spi_data & 0xFF;
+
+    HAL_GPIO_WritePin(MCP4922_CS_GPIO_Port, MCP4922_CS_Pin, GPIO_PIN_RESET);
+    result = HAL_SPI_Transmit(&hspi1, data_bytes, 2, HAL_MAX_DELAY);
+    HAL_GPIO_WritePin(MCP4922_CS_GPIO_Port, MCP4922_CS_Pin, GPIO_PIN_SET);
+
+    if(result != HAL_OK) spi_errors++;
+    return result;
+}
+
+uint16_t GenerateSineWave(Signal_Generator_t* gen) {
+    gen->phase_acc += gen->phase_inc;
+    uint8_t table_index = (gen->phase_acc >> (PHASE_RESOLUTION - 8)) & 0xFF;
+    uint16_t sine_value = sine_table[table_index];
+    int32_t centered_sine = sine_value - 2048;
+    int32_t scaled_sine = (centered_sine * gen->amplitude) >> 11;
+    int32_t final_value = 2048 + scaled_sine;
+    if(final_value < 0) final_value = 0;
+    if(final_value > 4095) final_value = 4095;
+    return (uint16_t)final_value;
+}
+
+uint16_t GenerateWaveform(Signal_Generator_t* gen) {
+    return GenerateSineWave(gen);  // Por ahora solo seno
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
@@ -87,16 +219,12 @@ int main(void)
   MX_SPI1_Init();
   MX_TIM2_Init();
   MX_USART1_UART_Init();
-
   /* USER CODE BEGIN 2 */
   printf("\r\n=== MCP4922 Dual Channel LFO Generator ===\r\n");
   printf("Sistema iniciado correctamente\r\n");
 
   MCP4922_Init();
   printf("MCP4922 inicializado\r\n");
-
-  MUX_ReadAllChannels();
-  printf("Sistema listo!\r\n\r\n");
 
   HAL_TIM_Base_Start_IT(&htim2);
   HAL_GPIO_WritePin(LED_BUILTIN_GPIO_Port, LED_BUILTIN_Pin, GPIO_PIN_RESET);
@@ -109,40 +237,21 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    // Actualización de forma de onda a 10kHz
     if(update_flag) {
         update_flag = 0;
-        UpdateWaveform();
+        signal_gen_A.current_value = GenerateWaveform(&signal_gen_A);
+        signal_gen_B.current_value = GenerateWaveform(&signal_gen_B);
         MCP4922_WriteValue(0, signal_gen_A.current_value);
         MCP4922_WriteValue(1, signal_gen_B.current_value);
     }
 
-    // Lectura de ADC cada 50ms
-    static uint32_t last_adc_read = 0;
-    if(HAL_GetTick() - last_adc_read > 50) {
-        last_adc_read = HAL_GetTick();
-        MUX_ReadAllChannels();
-    }
-
-    // Revisión de botones cada 10ms
-    static uint32_t last_btn_check = 0;
-    if(HAL_GetTick() - last_btn_check > 10) {
-        last_btn_check = HAL_GetTick();
-        CheckButtons();
-    }
-
-    // Revisión de entradas de sincronización cada 5ms
-    static uint32_t last_sync_check = 0;
-    if(HAL_GetTick() - last_sync_check > 5) {
-        last_sync_check = HAL_GetTick();
-        CheckSyncInputs();
-    }
-
-    // Información de debug cada 2 segundos
     static uint32_t last_debug = 0;
     if(HAL_GetTick() - last_debug > 2000) {
         last_debug = HAL_GetTick();
-        PrintDebugInfo();
+        debug_counter++;
+        printf("=== Debug #%lu ===\r\n", debug_counter);
+        printf("Ch A: DAC=%d, Ch B: DAC=%d\r\n", signal_gen_A.current_value, signal_gen_B.current_value);
+        HAL_GPIO_TogglePin(LED_BUILTIN_GPIO_Port, LED_BUILTIN_Pin);
     }
 
     HAL_Delay(1);
@@ -196,218 +305,6 @@ void SystemClock_Config(void)
   }
 }
 
-/**
-  * @brief ADC1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_ADC1_Init(void)
-{
-
-  /* USER CODE BEGIN ADC1_Init 0 */
-
-  /* USER CODE END ADC1_Init 0 */
-
-  ADC_ChannelConfTypeDef sConfig = {0};
-
-  /* USER CODE BEGIN ADC1_Init 1 */
-
-  /* USER CODE END ADC1_Init 1 */
-
-  /** Common config
-  */
-  hadc1.Instance = ADC1;
-  hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
-  hadc1.Init.ContinuousConvMode = DISABLE;
-  hadc1.Init.DiscontinuousConvMode = DISABLE;
-  hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
-  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc1.Init.NbrOfConversion = 1;
-  if (HAL_ADC_Init(&hadc1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure Regular Channel
-  */
-  sConfig.Channel = ADC_CHANNEL_0;
-  sConfig.Rank = ADC_REGULAR_RANK_1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_55CYCLES_5;
-  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN ADC1_Init 2 */
-
-  /* USER CODE END ADC1_Init 2 */
-
-}
-
-/**
-  * @brief SPI1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_SPI1_Init(void)
-{
-
-  /* USER CODE BEGIN SPI1_Init 0 */
-
-  /* USER CODE END SPI1_Init 0 */
-
-  /* USER CODE BEGIN SPI1_Init 1 */
-
-  /* USER CODE END SPI1_Init 1 */
-  /* SPI1 parameter configuration*/
-  hspi1.Instance = SPI1;
-  hspi1.Init.Mode = SPI_MODE_MASTER;
-  hspi1.Init.Direction = SPI_DIRECTION_2LINES;
-  hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
-  hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
-  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
-  hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_32;
-  hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
-  hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
-  hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
-  hspi1.Init.CRCPolynomial = 10;
-  if (HAL_SPI_Init(&hspi1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN SPI1_Init 2 */
-
-  /* USER CODE END SPI1_Init 2 */
-
-}
-
-/**
-  * @brief TIM2 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM2_Init(void)
-{
-
-  /* USER CODE BEGIN TIM2_Init 0 */
-
-  /* USER CODE END TIM2_Init 0 */
-
-  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
-  TIM_MasterConfigTypeDef sMasterConfig = {0};
-
-  /* USER CODE BEGIN TIM2_Init 1 */
-
-  /* USER CODE END TIM2_Init 1 */
-  htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 719;
-  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 9;
-  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM2_Init 2 */
-
-  /* USER CODE END TIM2_Init 2 */
-
-}
-
-/**
-  * @brief USART1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USART1_UART_Init(void)
-{
-
-  /* USER CODE BEGIN USART1_Init 0 */
-
-  /* USER CODE END USART1_Init 0 */
-
-  /* USER CODE BEGIN USART1_Init 1 */
-
-  /* USER CODE END USART1_Init 1 */
-  huart1.Instance = USART1;
-  huart1.Init.BaudRate = 115200;
-  huart1.Init.WordLength = UART_WORDLENGTH_8B;
-  huart1.Init.StopBits = UART_STOPBITS_1;
-  huart1.Init.Parity = UART_PARITY_NONE;
-  huart1.Init.Mode = UART_MODE_TX_RX;
-  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN USART1_Init 2 */
-
-  /* USER CODE END USART1_Init 2 */
-
-}
-
-/**
-  * @brief GPIO Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_GPIO_Init(void)
-{
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
-
-  /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOC_CLK_ENABLE();
-  __HAL_RCC_GPIOD_CLK_ENABLE();
-  __HAL_RCC_GPIOA_CLK_ENABLE();
-  __HAL_RCC_GPIOB_CLK_ENABLE();
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LED_BUILTIN_GPIO_Port, LED_BUILTIN_Pin, GPIO_PIN_SET);
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, MUX_A_Pin|MUX_B_Pin|MUX_C_Pin|MCP4922_CS_Pin, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin : LED_BUILTIN_Pin */
-  GPIO_InitStruct.Pin = LED_BUILTIN_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LED_BUILTIN_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : MUX_A_Pin MUX_B_Pin MUX_C_Pin MCP4922_CS_Pin */
-  GPIO_InitStruct.Pin = MUX_A_Pin|MUX_B_Pin|MUX_C_Pin|MCP4922_CS_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : BTN_WAVE_A_Pin BTN_WAVE_B_Pin */
-  GPIO_InitStruct.Pin = BTN_WAVE_A_Pin|BTN_WAVE_B_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : SYNC_A_Pin SYNC_B_Pin */
-  GPIO_InitStruct.Pin = SYNC_A_Pin|SYNC_B_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-}
-
 /* USER CODE BEGIN 4 */
 
 /* USER CODE END 4 */
@@ -419,7 +316,6 @@ static void MX_GPIO_Init(void)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
   while (1)
   {
@@ -438,120 +334,6 @@ void Error_Handler(void)
 void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
   /* USER CODE END 6 */
 }
-#endif /* USE_FULL_ASSERT */_ADC_Init(&hadc1) != HAL_OK) {
-        Error_Handler();
-    }
-
-    sConfig.Channel = ADC_CHANNEL_0;
-    sConfig.Rank = ADC_REGULAR_RANK_1;
-    sConfig.SamplingTime = ADC_SAMPLETIME_55CYCLES_5;
-    if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK) {
-        Error_Handler();
-    }
-}
-
-static void MX_SPI1_Init(void) {
-    hspi1.Instance = SPI1;
-    hspi1.Init.Mode = SPI_MODE_MASTER;
-    hspi1.Init.Direction = SPI_DIRECTION_2LINES;
-    hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
-    hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
-    hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
-    hspi1.Init.NSS = SPI_NSS_SOFT;
-    hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_32;
-    hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
-    hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
-    hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
-    hspi1.Init.CRCPolynomial = 10;
-    if (HAL_SPI_Init(&hspi1) != HAL_OK) {
-        Error_Handler();
-    }
-}
-
-static void MX_TIM2_Init(void) {
-    TIM_ClockConfigTypeDef sClockSourceConfig = {0};
-    TIM_MasterConfigTypeDef sMasterConfig = {0};
-
-    htim2.Instance = TIM2;
-    htim2.Init.Prescaler = TIMER_PRESCALER - 1;
-    htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-    htim2.Init.Period = TIMER_PERIOD - 1;
-    htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-    htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-    if (HAL_TIM_Base_Init(&htim2) != HAL_OK) {
-        Error_Handler();
-    }
-    sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-    if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK) {
-        Error_Handler();
-    }
-    sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-    sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-    if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK) {
-        Error_Handler();
-    }
-}
-
-static void MX_USART1_UART_Init(void) {
-    huart1.Instance = USART1;
-    huart1.Init.BaudRate = 115200;
-    huart1.Init.WordLength = UART_WORDLENGTH_8B;
-    huart1.Init.StopBits = UART_STOPBITS_1;
-    huart1.Init.Parity = UART_PARITY_NONE;
-    huart1.Init.Mode = UART_MODE_TX_RX;
-    huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-    huart1.Init.OverSampling = UART_OVERSAMPLING_16;
-    if (HAL_UART_Init(&huart1) != HAL_OK) {
-        Error_Handler();
-    }
-}
-
-static void MX_GPIO_Init(void) {
-    GPIO_InitTypeDef GPIO_InitStruct = {0};
-
-    __HAL_RCC_GPIOC_CLK_ENABLE();
-    __HAL_RCC_GPIOA_CLK_ENABLE();
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-
-    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_3|GPIO_PIN_4, GPIO_PIN_RESET);
-
-    GPIO_InitStruct.Pin = GPIO_PIN_13;
-    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
-
-    GPIO_InitStruct.Pin = GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_3|GPIO_PIN_4;
-    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-    GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1;
-    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-    GPIO_InitStruct.Pull = GPIO_PULLUP;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-    GPIO_InitStruct.Pin = GPIO_PIN_10|GPIO_PIN_11;
-    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-    GPIO_InitStruct.Pull = GPIO_PULLUP;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-}
-
-void Error_Handler(void) {
-    __disable_irq();
-    while (1) {
-    }
-}
-
-#ifdef USE_FULL_ASSERT
-void assert_failed(uint8_t *file, uint32_t line) {
-}
-#endif
+#endif /* USE_FULL_ASSERT */
