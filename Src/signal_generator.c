@@ -1,14 +1,10 @@
 #include "signal_generator.h"
-#include "main.h"
-#include <math.h>
 
 /* Variables globales */
 Signal_Generator_t signal_gen_A;
 Signal_Generator_t signal_gen_B;
 
-const uint8_t subdivisions[6] = {1, 2, 4, 8, 16, 32};
 const char* waveform_names[WAVE_COUNT] = {"Sine", "Square", "Triangle", "Sawtooth", "RampDn", "Random"};
-const char* mode_names[2] = {"FREE", "SYNC"};
 
 const uint16_t sine_table[256] = {
     2048, 2098, 2148, 2198, 2248, 2298, 2348, 2398, 2447, 2496, 2545, 2594, 2642, 2690, 2737, 2784,
@@ -30,7 +26,6 @@ const uint16_t sine_table[256] = {
 };
 
 void SignalGenerator_Init(void) {
-    // Inicialización del canal A
     signal_gen_A.amplitude = 1023;
     signal_gen_A.frequency = 1000000;
     signal_gen_A.phase_acc = 0;
@@ -38,19 +33,14 @@ void SignalGenerator_Init(void) {
     signal_gen_A.current_value = 2048;
     signal_gen_A.waveform = WAVE_SINE;
     signal_gen_A.sync_mode = MODE_FREE;
-    signal_gen_A.clock_period = 1000;
-    signal_gen_A.subdivision = 1;
 
-    // Inicialización del canal B
     signal_gen_B.amplitude = 512;
     signal_gen_B.frequency = 2000000;
     signal_gen_B.phase_acc = 0;
     signal_gen_B.phase_inc = (signal_gen_B.frequency * FREQ_SCALE) / 1000;
     signal_gen_B.current_value = 2048;
-    signal_gen_B.waveform = WAVE_SINE;
+    signal_gen_B.waveform = WAVE_SQUARE;
     signal_gen_B.sync_mode = MODE_FREE;
-    signal_gen_B.clock_period = 1000;
-    signal_gen_B.subdivision = 1;
 }
 
 void UpdateWaveform(void) {
@@ -59,100 +49,30 @@ void UpdateWaveform(void) {
 }
 
 uint16_t GenerateWaveform(Signal_Generator_t* gen) {
+    gen->phase_acc += gen->phase_inc;
+
     switch(gen->waveform) {
-        case WAVE_SINE:      return GenerateSineWave(gen);
-        case WAVE_SQUARE:    return GenerateSquareWave(gen);
-        case WAVE_TRIANGLE:  return GenerateTriangleWave(gen);
-        case WAVE_SAWTOOTH:  return GenerateSawtoothWave(gen);
-        case WAVE_RAMP_DOWN: return GenerateRampDownWave(gen);
-        case WAVE_RANDOM:    return GenerateRandomWave(gen);
-        default:             return GenerateSineWave(gen);
-    }
-}
-
-uint16_t GenerateSineWave(Signal_Generator_t* gen) {
-    gen->phase_acc += gen->phase_inc;
-    uint8_t table_index = (gen->phase_acc >> (PHASE_RESOLUTION - 8)) & 0xFF;
-    uint16_t sine_value = sine_table[table_index];
-    int32_t centered_sine = sine_value - 2048;
-    int32_t scaled_sine = (centered_sine * gen->amplitude) >> 11;
-    int32_t final_value = 2048 + scaled_sine;
-    if(final_value < 0) final_value = 0;
-    if(final_value > 4095) final_value = 4095;
-    return (uint16_t)final_value;
-}
-
-uint16_t GenerateSquareWave(Signal_Generator_t* gen) {
-    gen->phase_acc += gen->phase_inc;
-    uint32_t phase_norm = gen->phase_acc >> (PHASE_RESOLUTION - 16);
-    if(phase_norm < 32768) {
-        return 2048 + gen->amplitude;
-    } else {
-        return 2048 - gen->amplitude;
-    }
-}
-
-uint16_t GenerateTriangleWave(Signal_Generator_t* gen) {
-    gen->phase_acc += gen->phase_inc;
-    uint32_t phase_norm = gen->phase_acc >> (PHASE_RESOLUTION - 16);
-    int32_t triangle_value;
-    if(phase_norm < 32768) {
-        triangle_value = (int32_t)(phase_norm * 2) - 32768;
-    } else {
-        triangle_value = 32768 - (int32_t)((phase_norm - 32768) * 2);
-    }
-    int32_t scaled_triangle = (triangle_value * gen->amplitude) >> 15;
-    int32_t final_value = 2048 + scaled_triangle;
-    if(final_value < 0) final_value = 0;
-    if(final_value > 4095) final_value = 4095;
-    return (uint16_t)final_value;
-}
-
-uint16_t GenerateSawtoothWave(Signal_Generator_t* gen) {
-    gen->phase_acc += gen->phase_inc;
-    uint32_t phase_norm = gen->phase_acc >> (PHASE_RESOLUTION - 16);
-    int32_t sawtooth_value = (int32_t)phase_norm - 32768;
-    int32_t scaled_sawtooth = (sawtooth_value * gen->amplitude) >> 15;
-    int32_t final_value = 2048 + scaled_sawtooth;
-    if(final_value < 0) final_value = 0;
-    if(final_value > 4095) final_value = 4095;
-    return (uint16_t)final_value;
-}
-
-uint16_t GenerateRampDownWave(Signal_Generator_t* gen) {
-    gen->phase_acc += gen->phase_inc;
-    uint32_t phase_norm = gen->phase_acc >> (PHASE_RESOLUTION - 16);
-    int32_t ramp_value = 32768 - (int32_t)phase_norm;
-    int32_t scaled_ramp = (ramp_value * gen->amplitude) >> 15;
-    int32_t final_value = 2048 + scaled_ramp;
-    if(final_value < 0) final_value = 0;
-    if(final_value > 4095) final_value = 4095;
-    return (uint16_t)final_value;
-}
-
-uint16_t GenerateRandomWave(Signal_Generator_t* gen) {
-    static uint32_t last_phase_A = 0;
-    static uint32_t last_phase_B = 0;
-    static uint16_t random_value_A = 2048;
-    static uint16_t random_value_B = 2048;
-
-    gen->phase_acc += gen->phase_inc;
-
-    if(gen == &signal_gen_A) {
-        if((gen->phase_acc >> (PHASE_RESOLUTION - 2)) != (last_phase_A >> (PHASE_RESOLUTION - 2))) {
-            uint32_t random = HAL_GetTick() * 1103515245 + 12345;
-            random_value_A = 2048 + (((int32_t)(random & 0xFFFF) - 32768) * gen->amplitude) / 32768;
-            if(random_value_A > 4095) random_value_A = 4095;
+        case WAVE_SINE: {
+            uint8_t table_index = (gen->phase_acc >> (PHASE_RESOLUTION - 8)) & 0xFF;
+            uint16_t sine_value = sine_table[table_index];
+            int32_t centered_sine = sine_value - 2048;
+            int32_t scaled_sine = (centered_sine * gen->amplitude) >> 11;
+            int32_t final_value = 2048 + scaled_sine;
+            if(final_value < 0) final_value = 0;
+            if(final_value > 4095) final_value = 4095;
+            return (uint16_t)final_value;
         }
-        last_phase_A = gen->phase_acc;
-        return random_value_A;
-    } else {
-        if((gen->phase_acc >> (PHASE_RESOLUTION - 2)) != (last_phase_B >> (PHASE_RESOLUTION - 2))) {
-            uint32_t random = (HAL_GetTick() + 12345) * 1103515245 + 67890;
-            random_value_B = 2048 + (((int32_t)(random & 0xFFFF) - 32768) * gen->amplitude) / 32768;
-            if(random_value_B > 4095) random_value_B = 4095;
+
+        case WAVE_SQUARE: {
+            uint32_t phase_norm = gen->phase_acc >> (PHASE_RESOLUTION - 16);
+            if(phase_norm < 32768) {
+                return 2048 + gen->amplitude;
+            } else {
+                return 2048 - gen->amplitude;
+            }
         }
-        last_phase_B = gen->phase_acc;
-        return random_value_B;
+
+        default:
+            return 2048; // Centro
     }
 }

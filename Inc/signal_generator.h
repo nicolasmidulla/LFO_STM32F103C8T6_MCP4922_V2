@@ -4,7 +4,7 @@
 #include "main.h"
 #include <stdint.h>
 
-/* Configuraciones del sistema */
+/* Configuraciones */
 #define SAMPLE_RATE         10000
 #define PHASE_RESOLUTION    24
 #define FREQ_SCALE          ((1UL << PHASE_RESOLUTION) / SAMPLE_RATE)
@@ -26,7 +26,7 @@ typedef enum {
     MODE_SYNC
 } OperationMode_t;
 
-/* Estructura del generador de señales */
+/* Estructura del generador */
 typedef struct {
     uint16_t amplitude;
     uint32_t frequency;
@@ -39,23 +39,14 @@ typedef struct {
     uint8_t subdivision;
 } Signal_Generator_t;
 
-/* Variables globales exportadas */
+/* Variables globales */
 extern Signal_Generator_t signal_gen_A;
 extern Signal_Generator_t signal_gen_B;
-extern const uint8_t subdivisions[6];
 extern const char* waveform_names[WAVE_COUNT];
-extern const char* mode_names[2];
-extern const uint16_t sine_table[256];
 
-/* Prototipos de funciones */
+/* Funciones */
 void SignalGenerator_Init(void);
 void UpdateWaveform(void);
 uint16_t GenerateWaveform(Signal_Generator_t* gen);
-uint16_t GenerateSineWave(Signal_Generator_t* gen);
-uint16_t GenerateSquareWave(Signal_Generator_t* gen);
-uint16_t GenerateTriangleWave(Signal_Generator_t* gen);
-uint16_t GenerateSawtoothWave(Signal_Generator_t* gen);
-uint16_t GenerateRampDownWave(Signal_Generator_t* gen);
-uint16_t GenerateRandomWave(Signal_Generator_t* gen);
 
-#endif /* SIGNAL_GENERATOR_H */
+#endif
