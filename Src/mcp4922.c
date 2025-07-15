@@ -1,12 +1,15 @@
 #include "mcp4922.h"
-#include "project_config.h"
 #include "signal_generator.h"
-
-/* Variables externas */
-extern SPI_HandleTypeDef hspi1;
+#include "spi.h"
 
 /* Variables locales */
 uint32_t spi_errors = 0;
+
+/* Configuraciones del MCP4922 */
+#define MCP4922_CH_A            0x0000
+#define MCP4922_CH_B            0x8000
+#define MCP4922_GAINx1          0x2000
+#define MCP4922_SHUTDOWN_OFF    0x1000
 
 void MCP4922_Init(void) {
     // Configurar CS como inactivo (alto)

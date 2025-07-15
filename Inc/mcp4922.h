@@ -2,7 +2,6 @@
 #define MCP4922_H
 
 #include "main.h"
-#include "project_config.h"
 #include <stdint.h>
 
 /* Prototipos de funciones del MCP4922 */

@@ -2,8 +2,12 @@
 #define SIGNAL_GENERATOR_H
 
 #include "main.h"
-#include "project_config.h"
 #include <stdint.h>
+
+/* Configuraciones del sistema */
+#define SAMPLE_RATE         10000
+#define PHASE_RESOLUTION    24
+#define FREQ_SCALE          ((1UL << PHASE_RESOLUTION) / SAMPLE_RATE)
 
 /* Tipos de forma de onda */
 typedef enum {
